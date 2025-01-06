@@ -36,14 +36,14 @@ export default function Home() {
   const [shouldResetTimer, setShouldResetTimer] = useState(false);
 
   useEffect(() => {
-    fetch('http://localhost:8000/difficulties')
+    fetch('https://semantic-meaning-game-fastapi.onrender.com/difficulties')
       .then(res => res.json())
       .then(data => setDifficulties(data.difficulties));
   }, []);
 
   const startGame = async (difficulty: string, timerDuration: number | null) => {
     try {
-      const response = await fetch(`http://localhost:8000/initialize-game/${difficulty}`, {
+      const response = await fetch(`https://semantic-meaning-game-fastapi.onrender.com/initialize-game/${difficulty}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -62,7 +62,7 @@ export default function Home() {
 
       console.log('Initializing game with ID:', data.game_id);
       
-      const ws = new WebSocket(`ws://localhost:8000/game/${data.game_id}`);
+      const ws = new WebSocket(`https://semantic-meaning-game-fastapi.onrender.com/game/${data.game_id}`);
       
       ws.onerror = (error) => {
         console.error('WebSocket error:', error);
