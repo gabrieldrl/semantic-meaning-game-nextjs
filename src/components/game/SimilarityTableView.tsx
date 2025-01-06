@@ -8,7 +8,7 @@ interface Props {
 export const SimilarityTableView = ({ table, title }: Props) => (
   <div className="bg-white rounded-lg shadow-md p-4 mt-4">
     <h3 className="text-lg font-bold text-gray-800 mb-3 border-b pb-2">
-      {title}: <span className="text-blue-600">"{table.forWord}"</span>
+      {title}: <span className="text-blue-600">&quot;{table.forWord}&quot;</span>
     </h3>
     <div className="overflow-x-auto">
       <table className="min-w-full">

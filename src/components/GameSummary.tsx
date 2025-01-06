@@ -60,7 +60,7 @@ export const GameSummary = ({ words, finalTable, winner, gameOverMessage, timerD
               </h3>
               <div className="text-sm space-x-4">
                 <span className="text-green-600">Your words: {humanWords}</span>
-                <span className="text-blue-600">Computer's words: {computerWords}</span>
+                <span className="text-blue-600">Computer&apos;s words: {computerWords}</span>
               </div>
             </div>
             
