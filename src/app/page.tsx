@@ -1,101 +1,323 @@
-import Image from "next/image";
+'use client';
+
+import { useEffect, useState, useRef } from 'react';
+import { GameState } from '@/types';
+import { GameSummary } from '@/components/GameSummary';
+import { SimilarityTableView } from '@/components/game/SimilarityTableView';
+import { DifficultySelector } from '@/components/game/DifficultySelector';
+import { WordChain } from '@/components/game/WordChain';
+import { Timer } from '@/components/game/Timer';
 
 export default function Home() {
-  return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-semibold">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
+  const [difficulties, setDifficulties] = useState<string[]>([]);
+  const [gameState, setGameState] = useState<GameState>({
+    isConnected: false,
+    difficulty: null,
+    words: [],
+    currentWord: '',
+    similarityTable: { forWord: '', similarities: [] },
+    gameOver: false,
+    gameOverMessage: '',
+    error: '',
+    gameId: null,
+    playerTable: null,
+    computerTable: null,
+    gameSummary: null,
+    currentTables: {
+      player: null,
+      computer: null
+    },
+    threshold: null,  // Add this new property
+    timerDuration: null
+  });
+  
+  const wsRef = useRef<WebSocket | null>(null);
+  const [isTimerActive, setIsTimerActive] = useState(false);
+  const [shouldResetTimer, setShouldResetTimer] = useState(false);
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:min-w-44"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+  useEffect(() => {
+    fetch('http://localhost:8000/difficulties')
+      .then(res => res.json())
+      .then(data => setDifficulties(data.difficulties));
+  }, []);
+
+  const startGame = async (difficulty: string, timerDuration: number | null) => {
+    try {
+      const response = await fetch(`http://localhost:8000/initialize-game/${difficulty}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ timerDuration })
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to initialize game');
+      }
+      
+      const data = await response.json();
+      if (!data.game_id) {
+        throw new Error('No game ID received');
+      }
+
+      console.log('Initializing game with ID:', data.game_id);
+      
+      const ws = new WebSocket(`ws://localhost:8000/game/${data.game_id}`);
+      
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+        setGameState(prev => ({
+          ...prev,
+          error: 'Failed to connect to game server'
+        }));
+      };
+      
+      ws.onopen = () => {
+        console.log('WebSocket connection established');  // Add debug logging
+        setGameState(prev => ({ 
+          ...prev, 
+          isConnected: true,
+          difficulty,
+          gameId: data.game_id,
+          threshold: data.threshold,
+          timerDuration
+        }));
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        
+        switch (data.type) {
+          case 'computerMove':
+            setGameState(prev => ({
+              ...prev,
+              words: [...prev.words, { word: data.word, player: 'computer' }],
+              currentTables: {
+                ...prev.currentTables,
+                computer: data.similarityTable
+              },
+              error: ''
+            }));
+            break;
+            
+          case 'playerMove':
+            // Add the player's word to the chain when their move is processed
+            setGameState(prev => ({
+              ...prev,
+              words: [...prev.words, { word: data.similarityTable.forWord, player: 'human' }],
+              currentTables: {
+                ...prev.currentTables,
+                player: data.similarityTable
+              }
+            }));
+            break;
+            
+          case 'moveAccepted':
+            setGameState(prev => ({
+              ...prev,
+              currentTables: {
+                ...prev.currentTables,
+                computer: data.similarityTable
+              },
+              currentWord: '',
+              error: ''
+            }));
+            break;
+            
+          case 'error':
+            setGameState(prev => ({
+              ...prev,
+              error: data.message
+            }));
+            break;
+            
+          case 'gameOver':
+            setGameState(prev => ({
+              ...prev,
+              gameOver: true,
+              gameOverMessage: data.message,
+              similarityTable: data.similarityTable,
+              gameSummary: data.gameSummary,
+              // Clear current tables when game ends
+              currentTables: {
+                player: null,
+                computer: null
+              }
+            }));
+            break;
+        }
+      };
+
+      ws.onclose = () => {
+        setGameState(prev => ({ ...prev, isConnected: false }));
+      };
+
+      wsRef.current = ws;
+    } catch (error) {
+      console.error('Failed to initialize game:', error);
+    }
+  };
+
+  const submitWord = () => {
+    if (wsRef.current && gameState.currentWord) {
+      wsRef.current.send(JSON.stringify({ word: gameState.currentWord }));
+      setShouldResetTimer(true);  // Reset timer when user submits a word
+    }
+  };
+
+  useEffect(() => {
+    if (shouldResetTimer) {
+      setShouldResetTimer(false);
+    }
+  }, [shouldResetTimer]);
+
+  const getLargestTable = () => {
+    const playerSize = gameState.currentTables.player?.similarities.length || 0;
+    const computerSize = gameState.currentTables.computer?.similarities.length || 0;
+    return playerSize >= computerSize ? 'player' : 'computer';
+  };
+
+  // Determine winner based on game over message
+  const determineWinner = (message: string) => {
+    if (message.toLowerCase().includes("computer couldn't")) {
+      return 'human';
+    }
+    // If it's the player's word that was too similar, they lose
+    if (message.toLowerCase().includes("too similar")) {
+      return 'computer';
+    }
+    return 'computer'; // Default case
+  };
+
+  const handleTimeUp = () => {
+    setGameState(prev => ({
+      ...prev,
+      gameOver: true,
+      gameOverMessage: "Time's up! You took too long to make a move.",
+      winner: 'computer'
+    }));
+  };
+
+  useEffect(() => {
+    if (gameState.words.length > 0) {
+      const lastMove = gameState.words[gameState.words.length - 1];
+      setIsTimerActive(lastMove.player === 'computer' && !gameState.gameOver);
+    }
+  }, [gameState.words, gameState.gameOver]);
+
+  if (!gameState.isConnected && !gameState.difficulty) {
+    return <DifficultySelector difficulties={difficulties} onSelect={startGame} />;
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-blue-50 to-white">
+      <div className="max-w-4xl mx-auto p-4 md:p-8">
+        <div className="bg-white rounded-2xl shadow-xl p-6 mb-24">
+          {/* Header */}
+          <div className="flex justify-between items-center mb-6">
+            <h1 className="text-3xl font-bold text-gray-800">Semantic Meaning Game</h1>
+            {gameState.difficulty && (
+              <div className="flex items-center gap-2">
+                <span className="px-4 py-2 bg-blue-100 text-blue-800 rounded-full font-medium">
+                  {gameState.difficulty.toUpperCase()}
+                </span>
+                <span className="px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-sm">
+                  Threshold: {gameState.threshold?.toFixed(2)}
+                </span>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-6">
+            {gameState.gameOver ? (
+              <GameSummary 
+                words={gameState.words}
+                finalTable={gameState.similarityTable}
+                winner={determineWinner(gameState.gameOverMessage)}
+                gameOverMessage={gameState.gameOverMessage}
+                timerDuration={gameState.timerDuration}  // Add this prop
+              />
+            ) : (
+              <>
+                <WordChain 
+                  words={gameState.words}
+                  gameOver={false}
+                />
+
+                {/* Error Message */}
+                {gameState.error && (
+                  <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded">
+                    <p className="text-red-700">{gameState.error}</p>
+                  </div>
+                )}
+
+                {/* Current Similarity Tables */}
+                {(gameState.currentTables.player || gameState.currentTables.computer) && (
+                  <div className="space-y-4">
+                    <h2 className="text-xl font-semibold text-gray-700">
+                      Current Table {getLargestTable() === 'player' ? '(Your Word)' : '(Computer\'s Word)'}
+                    </h2>
+                    {gameState.currentTables.player && (
+                      <div className={getLargestTable() === 'player' ? 'ring-2 ring-green-500 rounded-lg' : ''}>
+                        <SimilarityTableView table={gameState.currentTables.player} title="Your Word Similarity" />
+                      </div>
+                    )}
+                    {gameState.currentTables.computer && (
+                      <div className={getLargestTable() === 'computer' ? 'ring-2 ring-blue-500 rounded-lg' : ''}>
+                        <SimilarityTableView table={gameState.currentTables.computer} title="Computer's Word Similarity" />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-6 flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
+
+        {/* Fixed Input Section */}
+        <div className="fixed bottom-0 left-0 right-0 bg-white shadow-lg border-t p-4">
+          <div className="max-w-4xl mx-auto">
+            {!gameState.gameOver ? (
+              <div className="flex gap-3">
+                <input
+                  type="text"
+                  value={gameState.currentWord}
+                  onChange={(e) => setGameState(prev => ({ ...prev, currentWord: e.target.value }))}
+                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 
+                           focus:border-blue-500 outline-none transition-all duration-200"
+                  placeholder="Enter your word..."
+                />
+                <button
+                  onClick={submitWord}
+                  className="px-6 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg
+                           hover:from-blue-600 hover:to-blue-700 transform hover:scale-105 transition-all"
+                >
+                  Submit
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => window.location.reload()}
+                className="w-full px-6 py-3 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg
+                         hover:from-green-600 hover:to-green-700 transition-all"
+              >
+                Play Again
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+      {/* Add Timer before the fixed input section */}
+      {gameState.timerDuration && !gameState.gameOver && (
+        <div className="fixed top-4 right-4">
+          <Timer
+            duration={gameState.timerDuration}
+            onTimeUp={handleTimeUp}
+            isActive={isTimerActive}
+            shouldReset={shouldResetTimer}
           />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+        </div>
+      )}
     </div>
   );
 }
