@@ -1,323 +1,429 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
-import { GameState } from '@/types';
-import { GameSummary } from '@/components/GameSummary';
-import { SimilarityTableView } from '@/components/game/SimilarityTableView';
-import { DifficultySelector } from '@/components/game/DifficultySelector';
-import { WordChain } from '@/components/game/WordChain';
-import { Timer } from '@/components/game/Timer';
+import { useState, useEffect, useRef } from 'react';
+import axios from 'axios';
 
-export default function Home() {
-  const [difficulties, setDifficulties] = useState<string[]>([]);
-  const [gameState, setGameState] = useState<GameState>({
-    isConnected: false,
-    difficulty: null,
-    words: [],
-    currentWord: '',
-    similarityTable: { forWord: '', similarities: [] },
-    gameOver: false,
-    gameOverMessage: '',
-    error: '',
-    gameId: null,
-    playerTable: null,
-    computerTable: null,
-    gameSummary: null,
-    currentTables: {
-      player: null,
-      computer: null
-    },
-    threshold: null,  // Add this new property
-    timerDuration: null
-  });
-  
-  const wsRef = useRef<WebSocket | null>(null);
-  const [isTimerActive, setIsTimerActive] = useState(false);
-  const [shouldResetTimer, setShouldResetTimer] = useState(false);
+const API_BASE_URL = 'http://localhost:8000';
+
+interface Message {
+  type: string;
+  word?: string;
+  similarityTable?: SimilarityTableData;
+  wordChain?: WordChainData[];
+  message?: string;
+  gameSummary?: GameSummaryData;
+  timeLeft?: number;
+}
+
+interface SimilarityTableData {
+  forWord: string;
+  similarities: SimilarityData[];
+}
+
+interface SimilarityData {
+  previousWord: string;
+  playedBy: string;
+  similarity: number | null;
+  tooSimilar: boolean;
+}
+
+interface WordChainData {
+  word: string;
+  player: string;
+}
+
+interface GameSummaryData {
+  winner: string;
+  totalWords: number;
+  humanWords: number;
+  computerWords: number;
+  wordHistory: WordChainData[];
+  message?: string;
+  finalWord?: string;
+  similarityTable?: SimilarityTableData;
+}
+
+interface SimilarityTableProps {
+  table: SimilarityTableData;
+}
+
+interface GameSummaryProps {
+  summary: GameSummaryData;
+}
+
+const GamePage = () => {
+  const [gameId, setGameId] = useState<string | null>(null);
+  const [difficulty, setDifficulty] = useState<string>('easy');
+  const [timerDuration, setTimerDuration] = useState<number | null>(null);
+  const [word, setWord] = useState<string>('');
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [socket, setSocket] = useState<WebSocket | null>(null);
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
+  const [latestTable, setLatestTable] = useState<SimilarityTableData | null>(null);
+  const [isGameOver, setIsGameOver] = useState<boolean>(false);
+  const [gameSummary, setGameSummary] = useState<GameSummaryData | null>(null);
+  const historyRef = useRef<HTMLDivElement>(null);
+  const [threshold, setThreshold] = useState<number | null>(null);
 
   useEffect(() => {
-    fetch('https://semantic-meaning-game-fastapi.onrender.com/difficulties')
-      .then(res => res.json())
-      .then(data => setDifficulties(data.difficulties));
-  }, []);
-
-  const startGame = async (difficulty: string, timerDuration: number | null) => {
-    try {
-      const response = await fetch(`https://semantic-meaning-game-fastapi.onrender.com/initialize-game/${difficulty}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ timerDuration })
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to initialize game');
-      }
-      
-      const data = await response.json();
-      if (!data.game_id) {
-        throw new Error('No game ID received');
-      }
-
-      console.log('Initializing game with ID:', data.game_id);
-      
-      const ws = new WebSocket(`https://semantic-meaning-game-fastapi.onrender.com/game/${data.game_id}`);
-      
-      ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        setGameState(prev => ({
-          ...prev,
-          error: 'Failed to connect to game server'
-        }));
-      };
-      
-      ws.onopen = () => {
-        console.log('WebSocket connection established');  // Add debug logging
-        setGameState(prev => ({ 
-          ...prev, 
-          isConnected: true,
-          difficulty,
-          gameId: data.game_id,
-          threshold: data.threshold,
-          timerDuration
-        }));
-      };
-
+    if (gameId) {
+      const ws = new WebSocket(`${API_BASE_URL.replace('http', 'ws')}/game/${gameId}`);
       ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        
-        switch (data.type) {
-          case 'computerMove':
-            setGameState(prev => ({
-              ...prev,
-              words: [...prev.words, { word: data.word, player: 'computer' }],
-              currentTables: {
-                ...prev.currentTables,
-                computer: data.similarityTable
-              },
-              error: ''
-            }));
-            break;
-            
-          case 'playerMove':
-            // Add the player's word to the chain when their move is processed
-            setGameState(prev => ({
-              ...prev,
-              words: [...prev.words, { word: data.similarityTable.forWord, player: 'human' }],
-              currentTables: {
-                ...prev.currentTables,
-                player: data.similarityTable
-              }
-            }));
-            break;
-            
-          case 'moveAccepted':
-            setGameState(prev => ({
-              ...prev,
-              currentTables: {
-                ...prev.currentTables,
-                computer: data.similarityTable
-              },
-              currentWord: '',
-              error: ''
-            }));
-            break;
-            
-          case 'error':
-            setGameState(prev => ({
-              ...prev,
-              error: data.message
-            }));
-            break;
-            
-          case 'gameOver':
-            setGameState(prev => ({
-              ...prev,
-              gameOver: true,
-              gameOverMessage: data.message,
-              similarityTable: data.similarityTable,
-              gameSummary: data.gameSummary,
-              // Clear current tables when game ends
-              currentTables: {
-                player: null,
-                computer: null
-              }
-            }));
-            break;
+        const data: Message = JSON.parse(event.data);
+        if (data.type === 'timerUpdate') {
+          setTimeLeft(data.timeLeft || null);
+        } else if (data.type === 'gameOver') {
+          setIsGameOver(true);
+          const summary = {
+            ...data.gameSummary!,
+            humanWords: data.gameSummary!.wordHistory.filter((w) => w.player === 'human').length,
+            computerWords: data.gameSummary!.wordHistory.filter((w) => w.player === 'computer').length,
+          };
+          setGameSummary(summary);
+          console.log('Game Over:', summary);
+        } else {
+          setMessages((prev) => [...prev, data]);
+          if (data.similarityTable) {
+            setLatestTable(data.similarityTable);
+          }
         }
       };
-
-      ws.onclose = () => {
-        setGameState(prev => ({ ...prev, isConnected: false }));
-      };
-
-      wsRef.current = ws;
-    } catch (error) {
-      console.error('Failed to initialize game:', error);
+      setSocket(ws);
+      return () => ws.close();
     }
-  };
-
-  const submitWord = () => {
-    if (wsRef.current && gameState.currentWord) {
-      wsRef.current.send(JSON.stringify({ word: gameState.currentWord }));
-      setShouldResetTimer(true);  // Reset timer when user submits a word
-    }
-  };
+  }, [gameId]);
 
   useEffect(() => {
-    if (shouldResetTimer) {
-      setShouldResetTimer(false);
+    if (historyRef.current) {
+      historyRef.current.scrollTop = historyRef.current.scrollHeight;
     }
-  }, [shouldResetTimer]);
+  }, [messages]);
 
-  const getLargestTable = () => {
-    const playerSize = gameState.currentTables.player?.similarities.length || 0;
-    const computerSize = gameState.currentTables.computer?.similarities.length || 0;
-    return playerSize >= computerSize ? 'player' : 'computer';
+  const startGame = async () => {
+    const response = await axios.post(`${API_BASE_URL}/initialize-game/${difficulty}`, { timerDuration });
+    setGameId(response.data.game_id);
+    setThreshold(response.data.threshold);
   };
 
-  // Determine winner based on game over message
-  const determineWinner = (message: string) => {
-    if (message.toLowerCase().includes("computer couldn't")) {
-      return 'human';
+  const sendWord = () => {
+    if (socket && word) {
+      socket.send(JSON.stringify({ word }));
+      setWord('');
     }
-    // If it's the player's word that was too similar, they lose
-    if (message.toLowerCase().includes("too similar")) {
-      return 'computer';
-    }
-    return 'computer'; // Default case
   };
 
-  const handleTimeUp = () => {
-    setGameState(prev => ({
-      ...prev,
-      gameOver: true,
-      gameOverMessage: "Time's up! You took too long to make a move.",
-      winner: 'computer'
-    }));
-  };
+  const SimilarityTable = ({ table }: SimilarityTableProps) => (
+    <div className="bg-white rounded-xl p-4 shadow-md">
+      <h4 className="text-lg font-semibold mb-3">Similarity Table for: {table.forWord}</h4>
+      <div className="overflow-x-auto">
+        <table className="min-w-full">
+          <thead>
+            <tr className="bg-gray-50">
+              <th className="px-4 py-2 text-left">Previous Word</th>
+              <th className="px-4 py-2 text-left">Player</th>
+              <th className="px-4 py-2 text-left">Similarity</th>
+            </tr>
+          </thead>
+          <tbody>
+            {table.similarities.map((sim, i) => (
+              <tr key={i} className={sim.tooSimilar ? 'bg-red-50' : ''}>
+                <td className="px-4 py-2 border-t">{sim.previousWord}</td>
+                <td className="px-4 py-2 border-t">{sim.playedBy}</td>
+                <td className="px-4 py-2 border-t">
+                  {sim.similarity}
+                  {sim.tooSimilar && ' ⚠️'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 
-  useEffect(() => {
-    if (gameState.words.length > 0) {
-      const lastMove = gameState.words[gameState.words.length - 1];
-      setIsTimerActive(lastMove.player === 'computer' && !gameState.gameOver);
-    }
-  }, [gameState.words, gameState.gameOver]);
-
-  if (!gameState.isConnected && !gameState.difficulty) {
-    return <DifficultySelector difficulties={difficulties} onSelect={startGame} />;
-  }
-
-  return (
-    <div className="min-h-screen bg-gradient-to-b from-blue-50 to-white">
-      <div className="max-w-4xl mx-auto p-4 md:p-8">
-        <div className="bg-white rounded-2xl shadow-xl p-6 mb-24">
-          {/* Header */}
-          <div className="flex justify-between items-center mb-6">
-            <h1 className="text-3xl font-bold text-gray-800">Semantic Meaning Game</h1>
-            {gameState.difficulty && (
-              <div className="flex items-center gap-2">
-                <span className="px-4 py-2 bg-blue-100 text-blue-800 rounded-full font-medium">
-                  {gameState.difficulty.toUpperCase()}
-                </span>
-                <span className="px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-sm">
-                  Threshold: {gameState.threshold?.toFixed(2)}
-                </span>
-              </div>
-            )}
+  const WordChain = () => (
+    <div className="flex flex-wrap gap-2 my-4">
+      {messages
+        .filter(msg => msg.wordChain)
+        .slice(-1)[0]?.wordChain?.map((word, index) => (
+          <div
+            key={index}
+            className={`px-3 py-1 rounded-full text-sm font-medium ${
+              word.player === 'computer'
+                ? 'bg-blue-100 text-blue-800'
+                : 'bg-purple-100 text-purple-800'
+            }`}
+          >
+            {word.word}
+            <span className="ml-1 opacity-50">
+              {word.player === 'computer' ? '🤖' : '👤'}
+            </span>
           </div>
+        ))}
+    </div>
+  );
 
-          <div className="space-y-6">
-            {gameState.gameOver ? (
-              <GameSummary 
-                words={gameState.words}
-                finalTable={gameState.similarityTable}
-                winner={determineWinner(gameState.gameOverMessage)}
-                gameOverMessage={gameState.gameOverMessage}
-                timerDuration={gameState.timerDuration}  // Add this prop
-              />
-            ) : (
-              <>
-                <WordChain 
-                  words={gameState.words}
-                  gameOver={false}
-                />
-
-                {/* Error Message */}
-                {gameState.error && (
-                  <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded">
-                    <p className="text-red-700">{gameState.error}</p>
-                  </div>
-                )}
-
-                {/* Current Similarity Tables */}
-                {(gameState.currentTables.player || gameState.currentTables.computer) && (
-                  <div className="space-y-4">
-                    <h2 className="text-xl font-semibold text-gray-700">
-                      Current Table {getLargestTable() === 'player' ? '(Your Word)' : '(Computer\'s Word)'}
-                    </h2>
-                    {gameState.currentTables.player && (
-                      <div className={getLargestTable() === 'player' ? 'ring-2 ring-green-500 rounded-lg' : ''}>
-                        <SimilarityTableView table={gameState.currentTables.player} title="Your Word Similarity" />
-                      </div>
-                    )}
-                    {gameState.currentTables.computer && (
-                      <div className={getLargestTable() === 'computer' ? 'ring-2 ring-blue-500 rounded-lg' : ''}>
-                        <SimilarityTableView table={gameState.currentTables.computer} title="Computer's Word Similarity" />
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+  const GameSummary = ({ summary }: GameSummaryProps) => (
+    <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+      <div className="text-center mb-6">
+        <h3 className="text-2xl font-bold text-gray-800 mb-2">Game Over!</h3>
+        <div className={`text-xl font-semibold ${
+          summary.winner === 'human' ? 'text-green-600' : 'text-blue-600'
+        }`}>
+          {summary.winner === 'human' ? 'You Won! 🎉' : 'Computer Won! 🤖'}
         </div>
-
-        {/* Fixed Input Section */}
-        <div className="fixed bottom-0 left-0 right-0 bg-white shadow-lg border-t p-4">
-          <div className="max-w-4xl mx-auto">
-            {!gameState.gameOver ? (
-              <div className="flex gap-3">
-                <input
-                  type="text"
-                  value={gameState.currentWord}
-                  onChange={(e) => setGameState(prev => ({ ...prev, currentWord: e.target.value }))}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 
-                           focus:border-blue-500 outline-none transition-all duration-200"
-                  placeholder="Enter your word..."
-                />
-                <button
-                  onClick={submitWord}
-                  className="px-6 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg
-                           hover:from-blue-600 hover:to-blue-700 transform hover:scale-105 transition-all"
-                >
-                  Submit
-                </button>
+        <div className="mt-4 p-4 bg-gray-50 rounded-xl">
+          <div className="text-gray-700 text-lg">
+            {summary.message && summary.message.toLowerCase().includes('time') ? (
+              // Special handling for timer expiration
+              <div className="text-blue-600 font-medium">
+                Time&apos;s up! Computer wins! 🤖
               </div>
+            ) : summary.message && summary.message.toLowerCase().includes('similar') ? (
+              <>
+                Game ended because of similar words:
+                <div className="mt-2 flex gap-2 justify-center">
+                  {summary.similarityTable?.similarities
+                    .filter((sim) => sim.tooSimilar)
+                    .map((sim, i) => (
+                      <div key={i} className="inline-flex items-center gap-2">
+                        <span className="px-3 py-1 bg-red-100 text-red-800 rounded-full font-medium">
+                          {summary.finalWord}
+                        </span>
+                        <span className="text-red-600">↔</span>
+                        <span className="px-3 py-1 bg-red-100 text-red-800 rounded-full font-medium">
+                          {sim.previousWord}
+                        </span>
+                        <span className="text-gray-500">
+                          ({sim.similarity})
+                        </span>
+                      </div>
+                    ))}
+                </div>
+              </>
             ) : (
-              <button
-                onClick={() => window.location.reload()}
-                className="w-full px-6 py-3 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg
-                         hover:from-green-600 hover:to-green-700 transition-all"
-              >
-                Play Again
-              </button>
+              summary.message || "Game Over!"
             )}
           </div>
         </div>
       </div>
-      {/* Add Timer before the fixed input section */}
-      {gameState.timerDuration && !gameState.gameOver && (
-        <div className="fixed top-4 right-4">
-          <Timer
-            duration={gameState.timerDuration}
-            onTimeUp={handleTimeUp}
-            isActive={isTimerActive}
-            shouldReset={shouldResetTimer}
-          />
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-blue-50 rounded-xl p-4">
+          <div className="text-lg font-semibold">Total Words</div>
+          <div className="text-3xl font-bold text-blue-600">{summary.totalWords}</div>
+        </div>
+        <div className="bg-purple-50 rounded-xl p-4">
+          <div className="text-lg font-semibold">Your Words</div>
+          <div className="text-3xl font-bold text-purple-600">{summary.humanWords}</div>
+          <div className="text-sm text-gray-600 mt-1">
+            ({Math.round((summary.humanWords / summary.totalWords) * 100)}%)
+          </div>
+        </div>
+        <div className="bg-gray-50 rounded-xl p-4">
+          <div className="text-lg font-semibold">Computer Words</div>
+          <div className="text-3xl font-bold text-gray-600">{summary.computerWords}</div>
+          <div className="text-sm text-gray-600 mt-1">
+            ({Math.round((summary.computerWords / summary.totalWords) * 100)}%)
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-6">
+        <h4 className="text-xl font-semibold mb-3">Game Timeline</h4>
+        <div className="flex flex-col gap-2">
+          {summary.wordHistory.map((word, index) => (
+            <div
+              key={index}
+              className={`px-4 py-2 rounded-lg ${
+                word.player === 'computer'
+                  ? 'bg-blue-50 border border-blue-100'
+                  : 'bg-purple-50 border border-purple-100'
+              }`}
+            >
+              <div className="flex justify-between items-center">
+                <span>
+                  <span className="font-bold">{index + 1}.</span>
+                  <span className="ml-2 font-medium">{word.word}</span>
+                  <span className="ml-1 opacity-50">
+                    {word.player === 'computer' ? '🤖' : '👤'}
+                  </span>
+                </span>
+                <span className="text-sm text-gray-600">
+                  {word.player === 'computer' ? 'Computer' : 'You'}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
+  const GameHeader = () => (
+    <div className="flex flex-col md:flex-row justify-between items-center gap-4 bg-white rounded-2xl p-6 shadow-lg border border-gray-100 mb-6">
+      <div className="flex items-center gap-4">
+        <div className="px-4 py-2 bg-blue-50 rounded-lg">
+          <span className="text-sm text-gray-600">Game ID:</span>
+          <span className="ml-2 font-medium text-blue-600">{gameId}</span>
+        </div>
+        <div className="px-4 py-2 bg-purple-50 rounded-lg">
+          <span className="text-sm text-gray-600">Difficulty:</span>
+          <span className="ml-2 font-medium text-purple-600 capitalize">{difficulty}</span>
+        </div>
+        <div className="px-4 py-2 bg-gray-50 rounded-lg">
+          <span className="text-sm text-gray-600">Threshold:</span>
+          <span className="ml-2 font-medium text-gray-600">{threshold}</span>
+        </div>
+      </div>
+      {timeLeft !== null && (
+        <div className={`px-4 py-2 rounded-lg ${
+          timeLeft < 10 ? 'bg-red-50 text-red-600' : 'bg-green-50 text-gray-600'
+        }`}>
+          <span className="text-sm">Time Left:</span>
+          <span className="ml-2 font-bold">{timeLeft}s</span>
         </div>
       )}
     </div>
   );
-}
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-purple-50 p-8">
+      <div className="max-w-4xl mx-auto">
+        <h1 className="text-4xl font-bold text-gray-800 mb-8 text-center bg-white rounded-2xl p-6 shadow-sm">
+          Semantic Meaning Game
+        </h1>
+
+        {!gameId ? (
+          <div className="bg-white rounded-2xl p-8 shadow-lg border border-gray-100">
+            <div className="space-y-6">
+              <div className="squamorphic-input-group">
+                <label className="block text-gray-700 mb-2 font-medium">
+                  Difficulty Level
+                </label>
+                <select 
+                  value={difficulty} 
+                  onChange={(e) => setDifficulty(e.target.value)}
+                  className="w-full p-3 rounded-xl bg-gray-50 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-200 transition-all"
+                >
+                  <option value="easy">Easy</option>
+                  <option value="medium">Medium</option>
+                  <option value="hard">Hard</option>
+                  <option value="expert">Expert</option>
+                </select>
+              </div>
+
+              <div className="squamorphic-input-group">
+                <label className="block text-gray-700 mb-2 font-medium">
+                  Timer Duration (seconds)
+                </label>
+                <input
+                  type="number"
+                  value={timerDuration ?? ''}
+                  onChange={(e) => setTimerDuration(Number(e.target.value))}
+                  className="w-full p-3 rounded-xl bg-gray-50 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-200 transition-all"
+                />
+              </div>
+
+              <button 
+                onClick={startGame}
+                className="w-full py-4 px-6 bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-xl font-medium hover:opacity-90 transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98] shadow-md"
+              >
+                Start New Game
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            <GameHeader />
+            
+            <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+              <div className="flex gap-4">
+                <input
+                  type="text"
+                  value={word}
+                  onChange={(e) => setWord(e.target.value)}
+                  placeholder="Enter your word"
+                  className="flex-1 p-4 rounded-xl bg-gray-50 border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-200 transition-all"
+                  onKeyPress={(e) => e.key === 'Enter' && sendWord()}
+                />
+                <button
+                  onClick={sendWord}
+                  className="px-6 py-4 bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-xl font-medium hover:opacity-90 transition-all duration-200 transform hover:scale-[1.02] active:scale-[0.98] shadow-md"
+                >
+                  Send Word
+                </button>
+              </div>
+            </div>
+
+            {latestTable && (
+              <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+                <h3 className="text-xl font-semibold text-gray-700 mb-4">Latest Similarity Table</h3>
+                <SimilarityTable table={latestTable} />
+                <div className="mt-6">
+                  <h4 className="text-lg font-semibold mb-2">Word Chain</h4>
+                  <WordChain />
+                </div>
+              </div>
+            )}
+
+            {isGameOver ? (
+              gameSummary && <GameSummary summary={gameSummary} />
+            ) : (
+              <div 
+                ref={historyRef}
+                className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100 max-h-[600px] overflow-y-auto"
+              >
+                <h3 className="text-xl font-semibold text-gray-700 mb-4">Game History</h3>
+                <div className="space-y-4">
+                  {messages.map((msg, index) => (
+                    <div 
+                      key={index}
+                      className={`p-4 rounded-xl ${
+                        msg.type === 'computerMove' 
+                          ? 'bg-blue-50 border border-blue-100' 
+                          : 'bg-purple-50 border border-purple-100'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className="flex items-center gap-2 px-3 py-1 rounded-lg bg-white shadow-sm">
+                          <span className="text-sm font-medium text-gray-600">
+                            {msg.type === 'computerMove' ? 'Computer 🤖' : 'Player 👤'}
+                          </span>
+                          {msg.word && (
+                            <>
+                              <span className="text-gray-400">|</span>
+                              <span className="font-semibold text-gray-800">
+                                {msg.word}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      {msg.similarityTable && (
+                        <div className="mt-2 text-sm text-gray-600">
+                          <div className="font-medium">Similarities:</div>
+                          {msg.similarityTable.similarities.map((sim, i) => (
+                            <div key={i} className="ml-2">
+                              {sim.previousWord}: {sim.similarity}
+                              {sim.tooSimilar && ' ⚠️'}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {msg.message && (
+                        <div className="text-sm text-gray-600 mt-2">{msg.message}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default GamePage;

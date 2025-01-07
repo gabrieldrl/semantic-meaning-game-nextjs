@@ -17,7 +17,6 @@ const calculateScore = (words: WordEntry[], timerDuration: number | null): numbe
   
   // Timer multiplier
   if (timerDuration) {
-    // Shorter timers get higher multipliers
     const timerMultiplier = {
       10: 3,   // 3x points for 10s timer
       20: 2,   // 2x points for 20s timer
@@ -27,12 +26,16 @@ const calculateScore = (words: WordEntry[], timerDuration: number | null): numbe
     score *= timerMultiplier;
   }
   
-  return Math.round(score);
+  // Add 65% bonus points
+  score = Math.round(score * 1.65);
+  
+  return score;
 };
 
 export const GameSummary = ({ words, finalTable, winner, gameOverMessage, timerDuration }: GameSummaryProps) => {
   const humanWords = words.filter(w => w.player === 'human').length;
   const computerWords = words.filter(w => w.player === 'computer').length;
+  // Always show table data regardless of who won
   const hasTableData = finalTable && finalTable.similarities && finalTable.similarities.length > 0;
   
   // Always calculate score
