@@ -182,7 +182,7 @@ const GamePage = () => {
             ) : summary.message && summary.message.toLowerCase().includes('similar') ? (
               <>
                 Game ended because of similar words:
-                <div className="mt-2 flex gap-2 justify-center">
+                <div className="mt-2 flex gap-2 justify-center flex-wrap">
                   {summary.similarityTable?.similarities
                     .filter((sim) => sim.tooSimilar)
                     .map((sim, i) => (
@@ -288,14 +288,14 @@ const GamePage = () => {
   );
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-purple-50 p-8">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-purple-50 p-4 md:p-8">
       <div className="max-w-4xl mx-auto">
         <h1 className="text-4xl font-bold text-gray-800 mb-8 text-center bg-white rounded-2xl p-6 shadow-sm">
           Semantic Meaning Game
         </h1>
 
         {!gameId ? (
-          <div className="bg-white rounded-2xl p-8 shadow-lg border border-gray-100">
+          <div className="bg-white rounded-2xl p-6 md:p-8 shadow-lg border border-gray-100">
             <div className="space-y-6">
               <div className="squamorphic-input-group">
                 <label className="block text-gray-700 mb-2 font-medium">
@@ -338,7 +338,7 @@ const GamePage = () => {
             <GameHeader />
             
             <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
-              <div className="flex gap-4">
+              <div className="flex flex-col md:flex-row gap-4">
                 <input
                   type="text"
                   value={word}
